@@ -50,14 +50,19 @@ async function evalModel(model: string) {
       continue;
     }
     const t0 = Date.now();
+    let detail = "";
     try {
-      const out = await parser.parse(image, type);
-      rows.push({ file, ms: out.ms, items: out.receipt.items.length, diff: out.checksum_diff });
+      const { receipt: r, ms, checksum_diff } = await parser.parse(image, type);
+      rows.push({ file, ms, items: r.items.length, diff: checksum_diff });
+      // Enough to compare with the paper receipt by eye
+      const cents = (c: number) => (c / 100).toFixed(2);
+      detail = r.items.map((i) => `    ${i.display_name}  ${cents(i.price_cents)}`).join("\n");
+      detail += `\n    service ${cents(r.service_cents)}  tip ${cents(r.tip_cents)}  discount ${cents(r.discount_cents)}  total ${cents(r.total_cents)} ${r.currency}`;
     } catch (e) {
       rows.push({ file, ms: Date.now() - t0, items: 0, diff: e instanceof ParseError ? e.code : String(e) });
     }
     const last = rows[rows.length - 1];
-    console.log(`${model}  ${file}  ${last.ms} ms  items=${last.items}  diff=${last.diff}`);
+    console.log(`${model}  ${file}  ${last.ms} ms  items=${last.items}  diff=${last.diff}${detail && "\n" + detail}`);
   }
 
   const parsed = rows.filter((r) => typeof r.diff === "number");

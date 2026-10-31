@@ -43,3 +43,6 @@ next-env.d.ts
 
 # local backend database
 /server/data/
+
+# receipt photos for npm run eval (CORD is CC-BY, real receipts are private)
+/src/fixtures/photos/
