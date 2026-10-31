@@ -11,6 +11,7 @@ const TEXTS: Record<string, string> = {
   busy: "Too many scans right now. Wait a few seconds and try again.",
   timeout: "Reading the receipt took too long. Try again.",
   model_error: "Couldn't read the receipt right now. Try again in a moment.",
+  no_credit: "Receipt reading is paused right now. Enter the items by hand or try again later.",
   invalid_body: "Something in the receipt looks off. Check the prices and try again.",
   not_found: "This receipt doesn't exist or has expired.",
   network: "No connection to the server. Check your internet and try again.",

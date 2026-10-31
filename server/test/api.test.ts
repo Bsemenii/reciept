@@ -86,6 +86,49 @@ describe("parse", () => {
     expect((await real.request("/api/parse", json("POST", { image: heic }))).status).toBe(415);
     expect(await (await real.request("/api/parse", json("POST", { image: notImage }))).json()).toEqual({ error: "not_an_image" });
   });
+
+  // Stands in for the Anthropic API: counts calls and answers with `reply`
+  function fakeClaude(reply: () => Response) {
+    const calls = { n: 0 };
+    const fetch = (async () => {
+      calls.n++;
+      return reply();
+    }) as unknown as typeof globalThis.fetch;
+    const parser = createParser({ apiKey: "test", model: "test", mock: false, repo, fetch });
+    return { calls, real: createApp({ repo, hub, parser, origins: [] }) };
+  }
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString("base64");
+
+  it("caches a photo, so a retry doesn't call Claude again", async () => {
+    const receipt = {
+      is_receipt: true, currency: "PLN", service_cents: 0, tip_cents: 0, discount_cents: 0, total_cents: 1200,
+      lines: [{ name: "KAWA", display_name: "Kawa", qty: 1, line_total_cents: 1200 }],
+    };
+    const { calls, real } = fakeClaude(() =>
+      Response.json({
+        id: "msg_1", type: "message", role: "assistant", model: "test", stop_reason: "end_turn", stop_sequence: null,
+        content: [{ type: "text", text: JSON.stringify(receipt) }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+    );
+    const first = await (await real.request("/api/parse", json("POST", { image: jpeg }))).json();
+    const again = await (await real.request("/api/parse", json("POST", { image: jpeg }))).json();
+    expect(first).toMatchObject({ cached: false, checksum_diff: 0 });
+    expect(again).toMatchObject({ cached: true, receipt: first.receipt });
+    expect(calls.n).toBe(1);
+  });
+
+  it("reports an empty credit balance as no_credit, not a generic error", async () => {
+    const { real } = fakeClaude(() =>
+      Response.json(
+        { type: "error", error: { type: "billing_error", message: "Your credit balance is too low" } },
+        { status: 400 },
+      ),
+    );
+    const res = await real.request("/api/parse", json("POST", { image: jpeg }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "no_credit" });
+  });
 });
 
 describe("sniffImage", () => {

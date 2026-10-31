@@ -15,7 +15,7 @@ export type ParseOutcome = ParseResult & { model: string; ms: number; cached: bo
 
 export class ParseError extends Error {
   constructor(
-    public code: "not_a_receipt" | "unreadable" | "busy" | "model_error" | "timeout",
+    public code: "not_a_receipt" | "unreadable" | "busy" | "no_credit" | "model_error" | "timeout",
     public status: 422 | 429 | 502 | 504,
   ) {
     super(code);
@@ -25,6 +25,13 @@ export class ParseError extends Error {
 const DEMO: Draft = JSON.parse(
   readFileSync(new URL("../../src/fixtures/demo-receipt.json", import.meta.url), "utf8"),
 );
+
+// Part of the cache key, so editing prompt.ts or the output schema re-reads photos that were already cached
+const PROMPT_VERSION = createHash("sha256")
+  .update(PARSE_PROMPT)
+  .update(JSON.stringify(ParsedReceiptSchema.toJSONSchema()))
+  .digest("hex")
+  .slice(0, 12);
 
 // At most this many Claude calls in flight; extra requests wait their turn instead of piling up.
 const MAX_CONCURRENT = 2;
@@ -69,9 +76,11 @@ export function createParser(opts: {
   mock: boolean;
   repo: Repo;
   mockDelayMs?: number;
+  fetch?: typeof fetch; // tests stub the Anthropic API with this
 }) {
   const { model, mock, repo, mockDelayMs = 1500 } = opts;
-  const client = mock ? null : new Anthropic({ apiKey: opts.apiKey, timeout: 45_000, maxRetries: 1 });
+  const client = mock ? null : new Anthropic({ apiKey: opts.apiKey, timeout: 45_000, maxRetries: 1, fetch: opts.fetch });
+  const cacheKey = `${model}:${PROMPT_VERSION}`;
   const limit = semaphore(MAX_CONCURRENT);
 
   async function callClaude(image: string, mediaType: MediaType): Promise<ParseResult> {
@@ -107,6 +116,11 @@ export function createParser(opts: {
       if (error instanceof ParseError) throw error;
       if (error instanceof Anthropic.RateLimitError) throw new ParseError("busy", 429);
       if (error instanceof Anthropic.APIConnectionTimeoutError) throw new ParseError("timeout", 504);
+      if (error instanceof Anthropic.APIError && error.type === "billing_error") {
+        // Out of credits looks like a random failure to the user; make it obvious to whoever runs the server
+        console.error("parse failed: Anthropic credit balance is empty. Top up in the Console or set MOCK_PARSE=1.");
+        throw new ParseError("no_credit", 502);
+      }
       if (error instanceof Anthropic.APIError) {
         console.error("parse failed", error.status, error.message);
         throw new ParseError("model_error", 502);
@@ -128,11 +142,11 @@ export function createParser(opts: {
 
       // Same photo twice (double tap, retry after a network blip) costs one model call
       const sha = createHash("sha256").update(image).digest("hex");
-      const hit = repo.getCachedParse<ParseResult>(sha, model);
+      const hit = repo.getCachedParse<ParseResult>(sha, cacheKey);
       if (hit) return { ...hit, model, ms: Date.now() - t0, cached: true };
 
       const result = await limit(() => callClaude(image, mediaType));
-      repo.cacheParse(sha, model, result);
+      repo.cacheParse(sha, cacheKey, result);
       return { ...result, model, ms: Date.now() - t0, cached: false };
     },
   };
