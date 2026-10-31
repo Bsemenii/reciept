@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { getClaims, getReceipt, setClaim, subscribeReceipt } from "@/lib/db";
+import { getReceipt, setClaim, subscribeReceipt } from "@/lib/db";
 import { errorCode, errorText } from "@/lib/errors";
 import { getPerson, savePerson } from "@/lib/identity";
 import { computeSplit, formatMoney } from "@/lib/split";
@@ -29,11 +29,12 @@ export default function ReceiptView() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMe(getPerson());
     getReceipt(id)
-      .then((r) => (r ? setReceipt(r) : setLoadError("not_found")))
+      .then((r) => {
+        if (!r) return setLoadError("not_found");
+        setReceipt(r.receipt);
+        setClaims(Object.fromEntries(r.claims.map((c) => [claimKey(c), c])));
+      })
       .catch((e) => setLoadError(errorCode(e)));
-    getClaims(id)
-      .then((list) => setClaims(Object.fromEntries(list.map((c) => [claimKey(c), c]))))
-      .catch(() => {}); // the live snapshot delivers claims too
   }, [id]);
 
   useEffect(() => {

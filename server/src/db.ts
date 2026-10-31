@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { customAlphabet } from "nanoid";
 import type { Claim, Receipt } from "../../src/lib/types";
 
-// Same contract as supabase/schema.sql. Items are stored as JSON, money as integer cents.
+// Contract shared with src/lib/types.ts. Items are stored as JSON, money as integer cents.
 const SCHEMA = `
 pragma journal_mode = wal;
 pragma foreign_keys = on;

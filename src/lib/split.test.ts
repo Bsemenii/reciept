@@ -86,6 +86,22 @@ describe("computeSplit", () => {
     expect(r.unclaimedCents).toBe(2200);
   });
 
+  it("a share doesn't change when someone else claims (people pay as soon as they see it)", () => {
+    const rc = receipt({ service_cents: 540, total_cents: 5940 });
+    const alone = computeSplit(rc, [claim("i1", "a")]);
+    const later = computeSplit(rc, [claim("i1", "a"), claim("i2", "b"), claim("i3", "b")]);
+    expect(alone.perPerson.a).toBe(3200 + 320);
+    expect(later.perPerson.a).toBe(alone.perPerson.a);
+  });
+
+  it("unclaimed carries its share of the extras, so shares + unclaimed = total at every moment", () => {
+    const rc = receipt({ service_cents: 540, total_cents: 5940 });
+    expect(computeSplit(rc, []).unclaimedCents).toBe(rc.total_cents);
+    const r = computeSplit(rc, [claim("i1", "a")]);
+    expect(r.unclaimedCents).toBe(2200 + 220);
+    expect(sum(r.perPerson) + r.unclaimedCents).toBe(rc.total_cents);
+  });
+
   it("splitUnclaimed shares leftovers among everyone", () => {
     const rc = receipt({ service_cents: 100, total_cents: 5500 });
     const r = computeSplit(rc, [claim("i1", "a"), claim("i2", "b")], { splitUnclaimed: true });

@@ -153,7 +153,7 @@ describe("receipts and claims", () => {
     const body = await res.json();
     expect(body.receipt.payer_name).toBe("Bohdan");
     expect(body.claims).toEqual([]);
-    expect(body.split.unclaimedCents).toBe(body.receipt.items.reduce((a: number, i: Draft["items"][0]) => a + i.price_cents, 0));
+    expect(body.split.unclaimedCents).toBe(body.receipt.total_cents); // nothing claimed yet: the whole bill is open
   });
 
   it("splits a shared item and every cent of the total is accounted for", async () => {

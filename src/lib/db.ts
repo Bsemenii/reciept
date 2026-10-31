@@ -23,17 +23,14 @@ export async function createReceipt(r: Omit<Receipt, "id" | "created_at">): Prom
   return id;
 }
 
-export async function getReceipt(id: string): Promise<Receipt | null> {
+/** Receipt and its claims in one request. null = no such receipt (or it expired). */
+export async function getReceipt(id: string): Promise<{ receipt: Receipt; claims: Claim[] } | null> {
   try {
-    return (await api<{ receipt: Receipt }>(`/api/receipts/${id}`)).receipt;
+    return await api<{ receipt: Receipt; claims: Claim[] }>(`/api/receipts/${id}`);
   } catch (e) {
     if (e instanceof Error && e.message === "not_found") return null;
     throw e;
   }
-}
-
-export async function getClaims(receiptId: string): Promise<Claim[]> {
-  return (await api<{ claims: Claim[] }>(`/api/receipts/${receiptId}`)).claims;
 }
 
 /** Claim or unclaim an item. Idempotent on the server, safe to retry. */
@@ -55,16 +52,30 @@ export function subscribeReceipt(
   onPresence: (people: Person[]) => void,
 ): () => void {
   const q = new URLSearchParams({ person_id: me.id, name: me.name, color: me.color });
-  const es = new EventSource(`${API}/api/receipts/${receiptId}/events?${q}`);
+  let es: EventSource;
+  let retry: ReturnType<typeof setTimeout> | undefined;
 
-  // Sent on every (re)connect. Claims are never deleted, only toggled, so replaying them is a full resync.
-  es.addEventListener("snapshot", (e) => {
-    const { claims, online } = JSON.parse(e.data) as { claims: Claim[]; online: Person[] };
-    claims.forEach(onClaim);
-    onPresence(online);
-  });
-  es.addEventListener("claim", (e) => onClaim((JSON.parse(e.data) as { claim: Claim }).claim));
-  es.addEventListener("presence", (e) => onPresence((JSON.parse(e.data) as { online: Person[] }).online));
+  function connect() {
+    es = new EventSource(`${API}/api/receipts/${receiptId}/events?${q}`);
+    // Sent on every (re)connect. Claims are never deleted, only toggled, so replaying them is a full resync.
+    es.addEventListener("snapshot", (e) => {
+      const { claims, online } = JSON.parse(e.data) as { claims: Claim[]; online: Person[] };
+      claims.forEach(onClaim);
+      onPresence(online);
+    });
+    es.addEventListener("claim", (e) => onClaim((JSON.parse(e.data) as { claim: Claim }).claim));
+    es.addEventListener("presence", (e) => onPresence((JSON.parse(e.data) as { online: Person[] }).online));
+    // EventSource retries a dropped stream by itself, but gives up for good on a non-200 answer
+    // (the proxy returns 500 while the backend restarts), so reopen it ourselves
+    es.onerror = () => {
+      if (es.readyState !== EventSource.CLOSED) return;
+      retry = setTimeout(connect, 2000);
+    };
+  }
+  connect();
 
-  return () => es.close();
+  return () => {
+    clearTimeout(retry);
+    es.close();
+  };
 }

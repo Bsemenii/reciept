@@ -36,13 +36,16 @@ export type SplitResult = {
   /** person_id -> cents owed, extras (service/tip/discount) included */
   perPerson: Record<string, number>;
   unclaimedItemIds: string[];
+  /** Still uncovered, with its share of the extras: perPerson + unclaimedCents = items + extras */
   unclaimedCents: number;
 };
 
 /**
  * Who owes what.
  * - An item claimed by N people is split equally between them.
- * - Service, tip and discount are spread proportionally to each person's item subtotal.
+ * - Service, tip and discount are spread proportionally to item value across the whole receipt,
+ *   unclaimed items included, so a share never changes when someone else taps (people pay by BLIK
+ *   as soon as they see their number).
  * - Unclaimed items are left out unless `splitUnclaimed` is set, then they are shared by everyone.
  */
 export function computeSplit(
@@ -75,8 +78,12 @@ export function computeSplit(
     });
   }
 
+  const sharedOut = opts.splitUnclaimed && people.length > 0;
+  const leftover = sharedOut ? 0 : unclaimedCents;
+
+  // The last weight is the unclaimed part: it holds its share of the extras until someone takes it
   const extras = receipt.service_cents + receipt.tip_cents - receipt.discount_cents;
-  const extraParts = allocate(extras, people.map((p) => subtotal[p]));
+  const extraParts = allocate(extras, [...people.map((p) => subtotal[p]), leftover]);
 
   const perPerson: Record<string, number> = {};
   people.forEach((p, i) => {
@@ -85,8 +92,8 @@ export function computeSplit(
 
   return {
     perPerson,
-    unclaimedItemIds: opts.splitUnclaimed && people.length > 0 ? [] : unclaimed,
-    unclaimedCents: opts.splitUnclaimed && people.length > 0 ? 0 : unclaimedCents,
+    unclaimedItemIds: sharedOut ? [] : unclaimed,
+    unclaimedCents: leftover + extraParts[people.length],
   };
 }
 

@@ -63,7 +63,7 @@ split/
 
 ---
 
-## 3. Модель даних (SQLite, той самий контракт, що й `supabase/schema.sql`)
+## 3. Модель даних (SQLite)
 
 ```sql
 pragma journal_mode = wal;
