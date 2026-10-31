@@ -17,6 +17,7 @@ export const ParseBodySchema = z.object({
 });
 
 export const CreateReceiptSchema = z.object({
+  payer_id: z.string().min(1).max(40), // the payer's Person.id from their device
   payer_name: z.string().trim().min(1).max(40),
   payer_phone: z.string().trim().max(20).default(""),
   currency: z.string().regex(/^[A-Z]{3}$/).default("PLN"),

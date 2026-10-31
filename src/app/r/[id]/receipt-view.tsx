@@ -111,6 +111,19 @@ export default function ReceiptView() {
   }
 
   const mine = split?.perPerson[me.id] ?? 0;
+  const isPayer = me.id === receipt.payer_id;
+
+  if (done && isPayer) {
+    return (
+      <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-4 p-6 text-center">
+        <p className="text-lg">Friends owe you</p>
+        <p className="text-5xl font-bold tabular-nums">{formatMoney(split?.owedToPayer ?? 0, receipt.currency)}</p>
+        <button className="underline" onClick={() => setDone(false)}>
+          Back
+        </button>
+      </main>
+    );
+  }
 
   if (done) {
     return (
@@ -162,7 +175,9 @@ export default function ReceiptView() {
           </p>
         )}
         <button className="rounded-2xl bg-black p-4 font-semibold text-white" onClick={() => setDone(true)}>
-          My share: {formatMoney(mine, receipt.currency)}
+          {isPayer
+            ? `Friends owe you: ${formatMoney(split?.owedToPayer ?? 0, receipt.currency)}`
+            : `My share: ${formatMoney(mine, receipt.currency)}`}
         </button>
         <button
           className="text-sm underline"

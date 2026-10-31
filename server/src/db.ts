@@ -11,6 +11,7 @@ pragma foreign_keys = on;
 
 create table if not exists receipts (
   id             text primary key,
+  payer_id       text not null default '',
   payer_name     text not null,
   payer_phone    text not null default '',
   currency       text not null default 'PLN',
@@ -53,6 +54,7 @@ type Row = Record<string, unknown>;
 function toReceipt(row: Row): Receipt {
   return {
     id: row.id as string,
+    payer_id: row.payer_id as string,
     payer_name: row.payer_name as string,
     payer_phone: row.payer_phone as string,
     currency: row.currency as string,
@@ -80,10 +82,15 @@ export function openDb(path: string) {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  // A split.db made before payer_id existed: add the column, old receipts keep '' (payer unknown)
+  const columns = db.prepare("select name from pragma_table_info('receipts')").all() as Row[];
+  if (!columns.some((c) => c.name === "payer_id")) {
+    db.exec("alter table receipts add column payer_id text not null default ''");
+  }
 
   const insertReceipt = db.prepare(
-    `insert into receipts (id, payer_name, payer_phone, currency, items, service_cents, tip_cents, discount_cents, total_cents)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `insert into receipts (id, payer_id, payer_name, payer_phone, currency, items, service_cents, tip_cents, discount_cents, total_cents)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const selectReceipt = db.prepare("select * from receipts where id = ?");
   const selectClaims = db.prepare("select * from claims where receipt_id = ? order by updated_at");
@@ -108,7 +115,7 @@ export function openDb(path: string) {
         const id = newId();
         try {
           insertReceipt.run(
-            id, r.payer_name, r.payer_phone, r.currency, JSON.stringify(r.items),
+            id, r.payer_id, r.payer_name, r.payer_phone, r.currency, JSON.stringify(r.items),
             r.service_cents, r.tip_cents, r.discount_cents, r.total_cents,
           );
           return id;

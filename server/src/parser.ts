@@ -8,7 +8,7 @@ import { checksumDiff } from "../../src/lib/split";
 import type { Receipt } from "../../src/lib/types";
 import type { Repo } from "./db";
 
-export type Draft = Omit<Receipt, "id" | "payer_name" | "payer_phone" | "created_at">;
+export type Draft = Omit<Receipt, "id" | "payer_id" | "payer_name" | "payer_phone" | "created_at">;
 export type MediaType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
 export type ParseResult = { receipt: Draft; checksum_diff: number };
 export type ParseOutcome = ParseResult & { model: string; ms: number; cached: boolean };
@@ -67,7 +67,7 @@ export function sniffImage(base64: string): MediaType | "heic" | null {
 }
 
 function withChecksum(receipt: Draft): ParseResult {
-  return { receipt, checksum_diff: checksumDiff({ ...receipt, id: "", payer_name: "", payer_phone: "" }) };
+  return { receipt, checksum_diff: checksumDiff(receipt) };
 }
 
 export function createParser(opts: {

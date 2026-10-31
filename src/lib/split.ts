@@ -26,15 +26,19 @@ export function allocate(total: number, weights: number[]): number[] {
   return parts.map((p) => p * sign);
 }
 
+type Sums = Pick<Receipt, "items" | "service_cents" | "tip_cents" | "discount_cents" | "total_cents">;
+
 /** items + service + tip - discount - total. 0 means the receipt adds up. */
-export function checksumDiff(r: Receipt): number {
+export function checksumDiff(r: Sums): number {
   const items = r.items.reduce((a, it) => a + it.price_cents, 0);
   return items + r.service_cents + r.tip_cents - r.discount_cents - r.total_cents;
 }
 
 export type SplitResult = {
-  /** person_id -> cents owed, extras (service/tip/discount) included */
+  /** person_id -> cents of the bill that person had, extras (service/tip/discount) included */
   perPerson: Record<string, number>;
+  /** What the payer gets back: everyone's share except the payer's own */
+  owedToPayer: number;
   unclaimedItemIds: string[];
   /** Still uncovered, with its share of the extras: perPerson + unclaimedCents = items + extras */
   unclaimedCents: number;
@@ -46,13 +50,10 @@ export type SplitResult = {
  * - Service, tip and discount are spread proportionally to item value across the whole receipt,
  *   unclaimed items included, so a share never changes when someone else taps (people pay by BLIK
  *   as soon as they see their number).
- * - Unclaimed items are left out unless `splitUnclaimed` is set, then they are shared by everyone.
+ * - Nobody owes for unclaimed items: the payer already paid them, so until someone taps them they
+ *   simply stay with the payer.
  */
-export function computeSplit(
-  receipt: Receipt,
-  claims: Claim[],
-  opts: { splitUnclaimed?: boolean } = {},
-): SplitResult {
+export function computeSplit(receipt: Receipt, claims: Claim[]): SplitResult {
   const active = claims.filter((c) => c.active);
   const people = [...new Set(active.map((c) => c.person_id))].sort();
   const subtotal: Record<string, number> = Object.fromEntries(people.map((p) => [p, 0]));
@@ -72,28 +73,22 @@ export function computeSplit(
     });
   }
 
-  if (opts.splitUnclaimed && people.length > 0 && unclaimedCents > 0) {
-    allocate(unclaimedCents, people.map(() => 1)).forEach((cents, i) => {
-      subtotal[people[i]] += cents;
-    });
-  }
-
-  const sharedOut = opts.splitUnclaimed && people.length > 0;
-  const leftover = sharedOut ? 0 : unclaimedCents;
-
   // The last weight is the unclaimed part: it holds its share of the extras until someone takes it
   const extras = receipt.service_cents + receipt.tip_cents - receipt.discount_cents;
-  const extraParts = allocate(extras, [...people.map((p) => subtotal[p]), leftover]);
+  const extraParts = allocate(extras, [...people.map((p) => subtotal[p]), unclaimedCents]);
 
   const perPerson: Record<string, number> = {};
+  let owedToPayer = 0;
   people.forEach((p, i) => {
     perPerson[p] = subtotal[p] + extraParts[i];
+    if (p !== receipt.payer_id) owedToPayer += perPerson[p];
   });
 
   return {
     perPerson,
-    unclaimedItemIds: sharedOut ? [] : unclaimed,
-    unclaimedCents: leftover + extraParts[people.length],
+    owedToPayer,
+    unclaimedItemIds: unclaimed,
+    unclaimedCents: unclaimedCents + extraParts[people.length],
   };
 }
 

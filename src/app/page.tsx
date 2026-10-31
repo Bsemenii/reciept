@@ -7,13 +7,13 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import demo from "@/fixtures/demo-receipt.json";
 import { createReceipt } from "@/lib/db";
-import { getPayer, savePayer, savePerson } from "@/lib/identity";
+import { getPayer, getPerson, savePayer, savePerson } from "@/lib/identity";
 import { errorCode, errorText } from "@/lib/errors";
 import { compressImage } from "@/lib/image";
 import { checksumDiff, formatMoney } from "@/lib/split";
 import type { Receipt } from "@/lib/types";
 
-type Draft = Omit<Receipt, "id" | "payer_name" | "payer_phone" | "created_at">;
+type Draft = Omit<Receipt, "id" | "payer_id" | "payer_name" | "payer_phone" | "created_at">;
 
 export default function ScanPage() {
   const router = useRouter();
@@ -58,8 +58,10 @@ export default function ScanPage() {
     setBusy(true);
     try {
       savePayer({ name: name.trim(), phone: phone.trim() });
-      savePerson(name);
-      const id = await createReceipt({ ...draft, payer_name: name.trim(), payer_phone: phone.trim() });
+      // Same name on this phone = same person (keeps their colour across receipts)
+      const known = getPerson();
+      const me = savePerson(name, known?.name === name.trim() ? known : undefined);
+      const id = await createReceipt({ ...draft, payer_id: me.id, payer_name: me.name, payer_phone: phone.trim() });
       router.push(`/r/${id}`);
     } catch (e) {
       setError(errorCode(e));
@@ -95,7 +97,7 @@ export default function ScanPage() {
     );
   }
 
-  const diff = checksumDiff({ ...draft, id: "", payer_name: "", payer_phone: "" });
+  const diff = checksumDiff(draft);
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-4 p-6">

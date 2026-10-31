@@ -10,6 +10,7 @@ export type Item = {
 
 export type Receipt = {
   id: string;
+  payer_id: string; // Person.id of whoever paid: their device shows "friends owe you", and unclaimed items stay with them
   payer_name: string;
   payer_phone: string;
   currency: string; // "PLN"

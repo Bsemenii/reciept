@@ -71,6 +71,7 @@ pragma foreign_keys = on;
 
 create table if not exists receipts (
   id             text primary key,          -- nanoid 8 символів, без схожих літер
+  payer_id       text not null default '',  -- Person.id платника ('' у старих чеках)
   payer_name     text not null,
   payer_phone    text not null default '',
   currency       text not null default 'PLN',
@@ -116,7 +117,7 @@ create table if not exists parse_cache (
 Тіло (як зараз, щоб фронт не міняти): `{ image: base64, media_type?: "image/jpeg" | "image/png" | "image/webp" }`.
 
 Відповідь `200`: `{ receipt: Draft, checksum_diff: number, model, ms, cached: boolean }`
-де `Draft = Omit<Receipt, "id" | "payer_name" | "payer_phone" | "created_at">`.
+де `Draft = Omit<Receipt, "id" | "payer_id" | "payer_name" | "payer_phone" | "created_at">`.
 
 Помилки: `400 no_image` · `413 image_too_large` (>8 MB base64; фронт і так стискає до ~300 KB) · `422 not_a_receipt` · `422 unreadable` · `429 busy` · `502 model_error` · `504 timeout`.
 
@@ -128,14 +129,20 @@ create table if not exists parse_cache (
 5. Ліміт: не більше 2 одночасних викликів Claude (семафор) і ~10 запитів/хв на IP — захист від подвійного тапу й випадкового спаму на демо.
 
 ### `POST /api/receipts`
-Тіло: `Draft + { payer_name, payer_phone }`. Сервер валідує zod-ом:
-- всі суми — цілі, `price_cents >= 0`, `items` 1…200, `id` унікальні, `payer_name` 1…40 символів;
+Тіло: `Draft + { payer_id, payer_name, payer_phone }`. `payer_id` — це `Person.id` платника з його телефона (`savePerson`), тому всюди, де він відкриє чек, він бачить «друзі винні тобі», а не «ти винен собі». Сервер валідує zod-ом:
+- всі суми — цілі, `price_cents >= 0`, `items` 1…200, `id` унікальні, `payer_id` обов'язковий, `payer_name` 1…40 символів;
 - `checksum_diff` **не блокує** (юзер міг свідомо лишити розбіжність), але повертається у відповіді.
 
 Відповідь `201`: `{ id }`.
 
 ### `GET /api/receipts/:id`
 `{ receipt, claims: Claim[], split: SplitResult }` — один запит на відкриття сторінки замість двох (`getReceipt` + `getClaims`). `404 not_found`.
+
+`SplitResult` (те саме рахує `computeSplit` на клієнті):
+- `perPerson[person_id]` — частка людини, з її долею обслуговування/чайових/знижки. Не змінюється, коли тапають інші.
+- `owedToPayer` — скільки повернуть платнику: сума часток усіх, крім `payer_id`.
+- `unclaimedItemIds`, `unclaimedCents` — що ще ніхто не взяв (з їхньою долею обслуговування). Поки ніхто не тапнув — це лишається на платнику, ніхто за це не винен.
+- Завжди: `сума perPerson + unclaimedCents = total` (якщо чек сходиться).
 
 ### `PUT /api/receipts/:id/claims`
 Тіло: `{ item_id, person: { id, name, color }, active: boolean }`.

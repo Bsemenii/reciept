@@ -4,6 +4,7 @@ import type { Claim, Receipt } from "./types";
 
 const receipt = (over: Partial<Receipt> = {}): Receipt => ({
   id: "r1",
+  payer_id: "payer",
   payer_name: "Bohdan",
   payer_phone: "500600700",
   currency: "PLN",
@@ -102,11 +103,12 @@ describe("computeSplit", () => {
     expect(sum(r.perPerson) + r.unclaimedCents).toBe(rc.total_cents);
   });
 
-  it("splitUnclaimed shares leftovers among everyone", () => {
-    const rc = receipt({ service_cents: 100, total_cents: 5500 });
-    const r = computeSplit(rc, [claim("i1", "a"), claim("i2", "b")], { splitUnclaimed: true });
-    expect(r.unclaimedCents).toBe(0);
-    expect(sum(r.perPerson)).toBe(rc.total_cents);
+  it("the payer gets back everyone's share but their own; unclaimed stays with the payer", () => {
+    const rc = receipt({ service_cents: 540, total_cents: 5940 });
+    const r = computeSplit(rc, [claim("i1", "payer"), claim("i2", "a")]);
+    expect(r.owedToPayer).toBe(1200 + 120); // only a's beer
+    expect(r.perPerson.payer).toBe(3200 + 320); // the payer's own pizza isn't owed to anyone
+    expect(r.unclaimedCents).toBe(1000 + 100); // nobody owes the lemonade
   });
 });
 

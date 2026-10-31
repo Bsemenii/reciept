@@ -1,3 +1,7 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { openDb, type Repo } from "../src/db";
@@ -25,7 +29,10 @@ async function parseDemo(): Promise<Draft> {
 
 async function createReceipt(): Promise<string> {
   const draft = await parseDemo();
-  const res = await app.request("/api/receipts", json("POST", { ...draft, payer_name: "Bohdan", payer_phone: "500600700" }));
+  const res = await app.request(
+    "/api/receipts",
+    json("POST", { ...draft, payer_id: bohdan.id, payer_name: "Bohdan", payer_phone: "500600700" }),
+  );
   expect(res.status).toBe(201);
   return (await res.json()).id;
 }
@@ -152,6 +159,7 @@ describe("receipts and claims", () => {
     const res = await app.request(`/api/receipts/${id}`);
     const body = await res.json();
     expect(body.receipt.payer_name).toBe("Bohdan");
+    expect(body.receipt.payer_id).toBe(bohdan.id);
     expect(body.claims).toEqual([]);
     expect(body.split.unclaimedCents).toBe(body.receipt.total_cents); // nothing claimed yet: the whole bill is open
   });
@@ -167,6 +175,7 @@ describe("receipts and claims", () => {
     const { split } = await (await app.request(`/api/receipts/${id}`)).json();
     expect(split.unclaimedCents).toBe(0);
     expect(split.perPerson[ola.id] + split.perPerson[bohdan.id]).toBe(receipt.total_cents);
+    expect(split.owedToPayer).toBe(split.perPerson[ola.id]); // Bohdan paid, only Ola owes
   });
 
   it("toggling off puts the item back to unclaimed, and repeats are idempotent", async () => {
@@ -180,6 +189,21 @@ describe("receipts and claims", () => {
     expect(body.claims[0].active).toBe(false);
   });
 
+  it("opens a split.db made before payer_id existed and keeps its receipts", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "split-")), "old.db");
+    const old = new DatabaseSync(path);
+    old.exec(`create table receipts (id text primary key, payer_name text not null, payer_phone text not null default '',
+      currency text not null default 'PLN', items text not null, service_cents integer not null default 0,
+      tip_cents integer not null default 0, discount_cents integer not null default 0, total_cents integer not null,
+      created_at text not null default '2026-10-30T20:00:00.000Z')`);
+    old.exec(`insert into receipts (id, payer_name, items, total_cents) values ('old12345', 'Bohdan', '[]', 0)`);
+    old.close();
+
+    const migrated = openDb(path);
+    expect(migrated.getReceipt("old12345")).toMatchObject({ payer_id: "", payer_name: "Bohdan" });
+    migrated.close();
+  });
+
   it("validates input", async () => {
     const id = await createReceipt();
     expect((await claim(id, "nope", ola)).status).toBe(400);
@@ -191,6 +215,7 @@ describe("receipts and claims", () => {
     const dupIds = await app.request(
       "/api/receipts",
       json("POST", {
+        payer_id: "p9",
         payer_name: "B",
         total_cents: 200,
         items: [
