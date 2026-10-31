@@ -41,12 +41,23 @@ create table if not exists parse_cache (
   created_at   text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   primary key (image_sha256, model)
 );
+
+-- SplitCheck frontend: the whole session as one JSON snapshot, same shape as its supabase/schema.sql.
+-- version is for compare-and-set: a write lands only if nobody wrote since the client read it.
+create table if not exists sessions (
+  id         text primary key,
+  version    integer not null check (version >= 1),
+  data       text not null,
+  updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
 `;
 
 // No look-alike characters, short enough to read off a screen.
 const newId = customAlphabet("23456789abcdefghjkmnpqrstuvwxyz", 8);
 
 export type NewReceipt = Omit<Receipt, "id" | "created_at">;
+/** A SplitCheck session snapshot. `data` is the frontend's Session, stored as is. */
+export type SessionRow = { id: string; version: number; data: unknown };
 export type Repo = ReturnType<typeof openDb>;
 
 type Row = Record<string, unknown>;
@@ -106,7 +117,14 @@ export function openDb(path: string) {
   const insertCache = db.prepare(
     "insert or replace into parse_cache (image_sha256, model, result) values (?, ?, ?)",
   );
+  const selectSession = db.prepare("select id, version, data from sessions where id = ?");
+  const insertSession = db.prepare("insert into sessions (id, version, data) values (?, ?, ?) on conflict (id) do nothing");
+  const updateSession = db.prepare(
+    `update sessions set version = ?, data = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     where id = ? and version = ?`,
+  );
   const deleteOld = db.prepare("delete from receipts where created_at < ?");
+  const deleteOldSessions = db.prepare("delete from sessions where updated_at < ?");
   const deleteOldCache = db.prepare("delete from parse_cache where created_at < ?");
 
   return {
@@ -141,6 +159,21 @@ export function openDb(path: string) {
       return c;
     },
 
+    getSession(id: string): SessionRow | null {
+      const row = selectSession.get(id) as Row | undefined;
+      return row ? { id: row.id as string, version: row.version as number, data: JSON.parse(row.data as string) } : null;
+    },
+
+    /** false = a session with this id already exists */
+    insertSession(s: SessionRow): boolean {
+      return Number(insertSession.run(s.id, s.version, JSON.stringify(s.data)).changes) === 1;
+    },
+
+    /** Writes only if the stored version is still `expectedVersion`. false = someone wrote first. */
+    updateSession(s: SessionRow, expectedVersion: number): boolean {
+      return Number(updateSession.run(s.version, JSON.stringify(s.data), s.id, expectedVersion).changes) === 1;
+    },
+
     getCachedParse<T>(sha256: string, model: string): T | null {
       const row = selectCache.get(sha256, model) as Row | undefined;
       return row ? (JSON.parse(row.result as string) as T) : null;
@@ -153,6 +186,7 @@ export function openDb(path: string) {
     deleteOlderThan(hours: number): number {
       const cutoff = new Date(Date.now() - hours * 3600_000).toISOString();
       deleteOldCache.run(cutoff);
+      deleteOldSessions.run(cutoff);
       return Number(deleteOld.run(cutoff).changes);
     },
 

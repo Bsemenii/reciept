@@ -43,3 +43,27 @@ export const ClaimBodySchema = z.object({
   person: PersonSchema,
   active: z.boolean(),
 });
+
+// SplitCheck session snapshot (its src/lib/types.ts Session). Loose objects: the frontend owns the shape,
+// the server only checks what keeps the money math and the payload sane.
+const Grosze = z.number().int().min(-10_000_000).max(10_000_000);
+const SessionDataSchema = z.looseObject({
+  id: z.string().min(1).max(40),
+  items: z.array(z.looseObject({ id: z.string().min(1).max(40), name: z.string().max(200), priceGrosze: Cents })).max(200),
+  serviceGrosze: Grosze,
+  participants: z
+    .array(z.looseObject({ id: z.string().min(1).max(40), name: z.string().max(40), color: z.string().max(40), isHost: z.boolean() }))
+    .max(50),
+  claims: z.record(z.string().max(40), z.array(z.string().max(40)).max(50)),
+  createdAt: z.number(),
+});
+
+export const SessionRowSchema = z
+  .object({ id: z.string().min(1).max(40), version: z.number().int().min(1), data: SessionDataSchema })
+  .refine((r) => r.data.id === r.id, "data.id must match id");
+
+export const SessionUpdateSchema = z.object({
+  version: z.number().int().min(2),
+  expected_version: z.number().int().min(1),
+  data: SessionDataSchema,
+});

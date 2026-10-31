@@ -296,3 +296,51 @@ describe("live events", () => {
     expect((await app.request("/api/receipts/missing1/events")).status).toBe(404);
   });
 });
+
+describe("sessions (SplitCheck frontend)", () => {
+  const data = (claims: Record<string, string[]> = {}) => ({
+    id: "s1",
+    items: [{ id: "i1", name: "Pizza", priceGrosze: 3200 }],
+    serviceGrosze: 320,
+    participants: [{ id: "h", name: "Host", color: "vista", isHost: true }],
+    claims,
+    createdAt: 0,
+  });
+
+  it("creates once, reads back, 404s an unknown id", async () => {
+    expect((await app.request("/api/sessions", json("POST", { id: "s1", version: 1, data: data() }))).status).toBe(201);
+    expect((await app.request("/api/sessions", json("POST", { id: "s1", version: 1, data: data() }))).status).toBe(409);
+    expect(await (await app.request("/api/sessions/s1")).json()).toEqual({ id: "s1", version: 1, data: data() });
+    expect((await app.request("/api/sessions/nope")).status).toBe(404);
+  });
+
+  it("writes only on the expected version, so concurrent taps don't overwrite each other", async () => {
+    await app.request("/api/sessions", json("POST", { id: "s1", version: 1, data: data() }));
+    const put = (expected: number, claims: Record<string, string[]>) =>
+      app.request("/api/sessions/s1", json("PUT", { version: expected + 1, expected_version: expected, data: data(claims) }));
+    expect((await put(1, { i1: ["h"] })).status).toBe(200);
+    const stale = await put(1, { i1: ["g"] });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "version_conflict" });
+    expect(await (await app.request("/api/sessions/s1")).json()).toMatchObject({ version: 2, data: { claims: { i1: ["h"] } } });
+  });
+
+  it("rejects broken snapshots", async () => {
+    const bad = { ...data(), items: [{ id: "i1", name: "Pizza", priceGrosze: 1.5 }] };
+    expect((await app.request("/api/sessions", json("POST", { id: "s1", version: 1, data: bad }))).status).toBe(400);
+    expect((await app.request("/api/sessions", json("POST", { id: "s2", version: 1, data: data() }))).status).toBe(400);
+  });
+
+  it("streams ready, then every write to the session", async () => {
+    await app.request("/api/sessions", json("POST", { id: "s1", version: 1, data: data() }));
+    const res = await app.request("/api/sessions/s1/events");
+    expect(res.headers.get("cache-control")).toContain("no-transform");
+    const pending = readEvents(res, 2);
+    await new Promise((r) => setTimeout(r, 20));
+    await app.request("/api/sessions/s1", json("PUT", { version: 2, expected_version: 1, data: data({ i1: ["h"] }) }));
+    const { events, close } = await pending;
+    await close();
+    expect(events.map((e) => e.event)).toEqual(["ready", "row"]);
+    expect(events[1].data).toMatchObject({ id: "s1", version: 2, data: { claims: { i1: ["h"] } } });
+  });
+});

@@ -11,7 +11,7 @@ import type { Claim, Person } from "../../src/lib/types";
 import type { Repo } from "./db";
 import type { Hub } from "./hub";
 import { ParseError, sniffImage, type Parser } from "./parser";
-import { ClaimBodySchema, CreateReceiptSchema, ParseBodySchema, PersonSchema } from "./schemas";
+import { ClaimBodySchema, CreateReceiptSchema, ParseBodySchema, PersonSchema, SessionRowSchema, SessionUpdateSchema } from "./schemas";
 
 const MAX_IMAGE_BASE64 = 8_000_000; // the client compresses to ~300 KB, this only stops accidents
 const PARSE_PER_MINUTE = 20; // per IP; cached repeats don't reach Claude anyway
@@ -79,14 +79,18 @@ export function createApp({ repo, hub, parser, origins }: Deps) {
   app.use("/api/parse", bodyLimit({ maxSize: 10 * 1024 * 1024, onError: tooLarge }));
   app.use("/api/receipts/*", bodyLimit({ maxSize: 256 * 1024, onError: (c) => fail(c, 413, "body_too_large") }));
   app.use("/api/receipts", bodyLimit({ maxSize: 256 * 1024, onError: (c) => fail(c, 413, "body_too_large") }));
+  app.use("/api/sessions", bodyLimit({ maxSize: 256 * 1024, onError: (c) => fail(c, 413, "body_too_large") }));
+  app.use("/api/sessions/*", bodyLimit({ maxSize: 256 * 1024, onError: (c) => fail(c, 413, "body_too_large") }));
 
   // streamSSE sets plain "no-cache". no-transform stops the Next dev proxy (and tunnels) from
   // gzipping the stream, which buffers events until the connection closes.
-  app.use("/api/receipts/:id/events", async (c, next) => {
+  const unbuffered = async (c: Context, next: () => Promise<void>) => {
     await next();
     c.res.headers.set("Cache-Control", "no-cache, no-transform");
     c.res.headers.set("X-Accel-Buffering", "no");
-  });
+  };
+  app.use("/api/receipts/:id/events", unbuffered);
+  app.use("/api/sessions/:id/events", unbuffered);
 
   app.get("/api/health", (c) =>
     c.json({ ok: true, model: parser.model, mock: parser.model === "mock", db: repo.ping() ? "ok" : "down", sse_clients: hub.connections() }),
@@ -165,6 +169,50 @@ export function createApp({ repo, hub, parser, origins }: Deps) {
       stream.writeSSE({ event: "snapshot", data: JSON.stringify(snapshot), retry: 2000 }).catch(() => {});
       const leave = hub.join(id, person, send, () => stream.abort());
 
+      const ping = setInterval(() => send("ping", {}), PING_MS);
+      await new Promise<void>((resolve) => stream.onAbort(resolve));
+      clearInterval(ping);
+      leave();
+    });
+  });
+
+  // SplitCheck frontend: session snapshots with compare-and-set, the same four operations as its
+  // Supabase port (select / insert / updateIfVersion / watch), so its transport logic stays as is.
+  const room = (id: string) => `session:${id}`;
+
+  app.get("/api/sessions/:id", (c) => {
+    const row = repo.getSession(c.req.param("id"));
+    return row ? c.json(row) : fail(c, 404, "not_found");
+  });
+
+  app.post("/api/sessions", async (c) => {
+    const row = await readJson(c, SessionRowSchema);
+    if (!repo.insertSession(row)) return c.json({ error: "exists" }, 409);
+    hub.broadcast(room(row.id), "row", row);
+    return c.json({ ok: true }, 201);
+  });
+
+  // 409 version_conflict = someone wrote first: the client re-reads and applies its change again
+  app.put("/api/sessions/:id", async (c) => {
+    const id = c.req.param("id");
+    const { version, expected_version, data } = await readJson(c, SessionUpdateSchema);
+    if (data.id !== id) return fail(c, 400, "invalid_body", "data.id must match the url");
+    if (!repo.getSession(id)) return fail(c, 404, "not_found");
+    const row = { id, version, data };
+    if (!repo.updateSession(row, expected_version)) return c.json({ error: "version_conflict" }, 409);
+    hub.broadcast(room(id), "row", row);
+    return c.json({ ok: true });
+  });
+
+  // "ready" on every (re)connect: the client re-reads once, so nothing written while it was away is lost
+  app.get("/api/sessions/:id/events", (c) => {
+    const id = c.req.param("id");
+    return streamSSE(c, async (stream) => {
+      const send = (event: string, data: unknown) => {
+        if (!stream.aborted) stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
+      };
+      const leave = hub.join(room(id), null, send, () => stream.abort());
+      stream.writeSSE({ event: "ready", data: "{}", retry: 2000 }).catch(() => {});
       const ping = setInterval(() => send("ping", {}), PING_MS);
       await new Promise<void>((resolve) => stream.onAbort(resolve));
       clearInterval(ping);
