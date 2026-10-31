@@ -1,0 +1,17 @@
+{
+  "currency": "PLN",
+  "items": [
+    { "id": "i0", "name": "PIZZA MARGHERITA 32CM", "display_name": "Pizza Margherita 32 cm", "price_cents": 3800 },
+    { "id": "i1", "name": "PIZZA DIAVOLA 32CM", "display_name": "Pizza Diavola 32 cm", "price_cents": 4400 },
+    { "id": "i2.1", "name": "PIWO LANE 0,5L", "display_name": "Piwo lane 0,5 l", "price_cents": 1600 },
+    { "id": "i2.2", "name": "PIWO LANE 0,5L", "display_name": "Piwo lane 0,5 l", "price_cents": 1600 },
+    { "id": "i2.3", "name": "PIWO LANE 0,5L", "display_name": "Piwo lane 0,5 l", "price_cents": 1600 },
+    { "id": "i3", "name": "LEMONIADA MALIN", "display_name": "Lemoniada malinowa", "price_cents": 1400 },
+    { "id": "i4", "name": "FRYTKI BELG", "display_name": "Frytki belgijskie", "price_cents": 1800 },
+    { "id": "i5", "name": "TIRAMISU", "display_name": "Tiramisu", "price_cents": 2200 }
+  ],
+  "service_cents": 1840,
+  "tip_cents": 0,
+  "discount_cents": 0,
+  "total_cents": 20240
+}
