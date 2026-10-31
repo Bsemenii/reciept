@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { expandLines, ParsedReceiptSchema } from "../../src/lib/parse";
-import { PARSE_PROMPT } from "../../src/lib/prompt";
+import { PARSE_PROMPT, recheckPrompt } from "../../src/lib/prompt";
 import { checksumDiff } from "../../src/lib/split";
 import type { Receipt } from "../../src/lib/types";
 import type { Repo } from "./db";
@@ -29,6 +29,7 @@ const DEMO: Draft = JSON.parse(
 // Part of the cache key, so editing prompt.ts or the output schema re-reads photos that were already cached
 const PROMPT_VERSION = createHash("sha256")
   .update(PARSE_PROMPT)
+  .update(String(recheckPrompt))
   .update(JSON.stringify(ParsedReceiptSchema.toJSONSchema()))
   .digest("hex")
   .slice(0, 12);
@@ -83,35 +84,53 @@ export function createParser(opts: {
   const cacheKey = `${model}:${PROMPT_VERSION}`;
   const limit = semaphore(MAX_CONCURRENT);
 
+  async function ask(messages: Anthropic.MessageParam[]) {
+    const response = await client!.messages.parse({
+      model,
+      max_tokens: 16000,
+      output_config: { effort: "low", format: zodOutputFormat(ParsedReceiptSchema) },
+      messages,
+    });
+    const parsed = response.parsed_output;
+    if (response.stop_reason === "refusal" || !parsed) throw new ParseError("unreadable", 422);
+    if (!parsed.is_receipt) throw new ParseError("not_a_receipt", 422);
+    const result = withChecksum({
+      currency: parsed.currency || "PLN",
+      items: expandLines(parsed.lines),
+      service_cents: Math.round(parsed.service_cents),
+      tip_cents: Math.round(parsed.tip_cents),
+      discount_cents: Math.round(parsed.discount_cents),
+      total_cents: Math.round(parsed.total_cents),
+    });
+    // Plain text only: parsed blocks carry an extra `parsed_output` field the API doesn't accept back
+    const reply = response.content.flatMap((b) => (b.type === "text" ? [{ type: "text" as const, text: b.text }] : []));
+    return { result, reply };
+  }
+
   async function callClaude(image: string, mediaType: MediaType): Promise<ParseResult> {
     try {
-      const response = await client!.messages.parse({
-        model,
-        max_tokens: 16000,
-        output_config: { effort: "low", format: zodOutputFormat(ParsedReceiptSchema) },
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: mediaType, data: image } },
-              { type: "text", text: PARSE_PROMPT },
-            ],
-          },
+      const question: Anthropic.MessageParam = {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: image } },
+          { type: "text", text: PARSE_PROMPT },
         ],
-      });
+      };
+      const first = await ask([question]);
+      if (first.result.checksum_diff === 0) return first.result;
 
-      const parsed = response.parsed_output;
-      if (response.stop_reason === "refusal" || !parsed) throw new ParseError("unreadable", 422);
-      if (!parsed.is_receipt) throw new ParseError("not_a_receipt", 422);
-
-      return withChecksum({
-        currency: parsed.currency || "PLN",
-        items: expandLines(parsed.lines),
-        service_cents: Math.round(parsed.service_cents),
-        tip_cents: Math.round(parsed.tip_cents),
-        discount_cents: Math.round(parsed.discount_cents),
-        total_cents: Math.round(parsed.total_cents),
-      });
+      // Doesn't add up: one second look with the numbers, so the payer doesn't have to fix prices by hand.
+      // Keep whichever reading is closer to the printed total; a failed second look keeps the first.
+      const r = first.result.receipt;
+      const recheck = recheckPrompt({ ...r, lines_cents: r.items.reduce((a, it) => a + it.price_cents, 0) });
+      try {
+        const second = await ask([question, { role: "assistant", content: first.reply }, { role: "user", content: recheck }]);
+        console.log(`parse recheck diff ${first.result.checksum_diff} -> ${second.result.checksum_diff}`);
+        return Math.abs(second.result.checksum_diff) < Math.abs(first.result.checksum_diff) ? second.result : first.result;
+      } catch (error) {
+        console.error("parse recheck failed, keeping the first reading", error instanceof Error ? error.message : error);
+        return first.result;
+      }
     } catch (error) {
       if (error instanceof ParseError) throw error;
       if (error instanceof Anthropic.RateLimitError) throw new ParseError("busy", 429);

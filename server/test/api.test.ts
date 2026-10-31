@@ -125,6 +125,37 @@ describe("parse", () => {
     expect(calls.n).toBe(1);
   });
 
+  const claudeSays = (r: object) =>
+    Response.json({
+      id: "msg_1", type: "message", role: "assistant", model: "test", stop_reason: "end_turn", stop_sequence: null,
+      content: [{ type: "text", text: JSON.stringify(r) }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+  const kawa = (cents: number) => ({
+    is_receipt: true, currency: "PLN", service_cents: 0, tip_cents: 0, discount_cents: 0, total_cents: 1200,
+    lines: [{ name: "KAWA", display_name: "Kawa", qty: 1, line_total_cents: cents }],
+  });
+
+  it("takes a second look when the receipt doesn't add up, and keeps the better reading", async () => {
+    const replies = [kawa(1800), kawa(1200)];
+    const { calls, real } = fakeClaude(() => claudeSays(replies[calls.n - 1]));
+    const out = await (await real.request("/api/parse", json("POST", { image: jpeg }))).json();
+    expect(calls.n).toBe(2);
+    expect(out).toMatchObject({ checksum_diff: 0, receipt: { items: [{ price_cents: 1200 }] } });
+  });
+
+  it("keeps the first reading when the second look is worse or fails", async () => {
+    const worse = [kawa(1300), kawa(2000)];
+    const a = fakeClaude(() => claudeSays(worse[a.calls.n - 1]));
+    expect(await (await a.real.request("/api/parse", json("POST", { image: jpeg }))).json()).toMatchObject({ checksum_diff: 100 });
+
+    const b = fakeClaude(() => (b.calls.n === 1 ? claudeSays(kawa(1300)) : Response.json({ type: "error", error: { type: "api_error", message: "boom" } }, { status: 500 })));
+    const other = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 0x10]).toString("base64"); // not cached by the case above
+    const res = await b.real.request("/api/parse", json("POST", { image: other }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ checksum_diff: 100 });
+  });
+
   it("reports an empty credit balance as no_credit, not a generic error", async () => {
     const { real } = fakeClaude(() =>
       Response.json(

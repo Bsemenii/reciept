@@ -2,6 +2,7 @@
 // add up to the grosz without edits. Picks PARSE_MODEL and gives a number for the pitch.
 //   npm run eval                                      (PARSE_MODEL from server/.env)
 //   npm run eval -- claude-opus-5-5 claude-haiku-5-5  (compare models)
+//   EVAL_ONLY=lidl npm run eval                       (only photos whose name contains "lidl")
 // Photos: JPEG/PNG/WebP under 5 MB (export from Photos as JPEG; HEIC is skipped).
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -23,7 +24,9 @@ const models = process.argv.slice(2).length ? process.argv.slice(2) : [config.mo
 
 let files: string[] = [];
 try {
-  files = readdirSync(DIR).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort();
+  files = readdirSync(DIR)
+    .filter((f) => /\.(jpe?g|png|webp)$/i.test(f) && f.includes(process.env.EVAL_ONLY ?? ""))
+    .sort();
 } catch {
   // reported below
 }
